@@ -1,9 +1,14 @@
-﻿@page "/threading"
+﻿@using System.Collections.Concurrent
+@using TechAptV1.Client.Services
+@page "/threading"
+@inject ThreadingService threadingService
 
 <h3>Threading &amp; Data Persistence</h3>
 
 <div>
-    <button class="btn btn-primary" @onclick="(async () => await this.Start())">Start</button>
+    <button class="btn btn-primary" @onclick="(async () => await this.Start())" disabled="@_isProcessing">
+        @(_isProcessing ? "Processing..." : "Start")
+    </button>
     <button class="btn btn-primary" @onclick="(async () => await this.Save())">Save</button>
 </div>
 <div>
@@ -26,11 +31,50 @@
     private int _evenNumbers = 0;
     private int _primeNumbers = 0;
     private int _totalNumbers = 0;
-
+    private bool _isProcessing = false;
+    private bool _isSaveDisabled = true;
+    private ConcurrentDictionary<int, int> _numberList = new(); // Create a Global ConcurrentDictionary - thread-safe dictionary designed for concurrent access in multi-threaded applications
     private async Task Start()
     {
         this.Logger.LogInformation("Start");
-        throw new NotImplementedException();
+        if (_isProcessing) return; // Prevent duplicate execution
+        _isProcessing = true;
+
+        // Immediately refresh UI to indicate processing has started
+        StateHasChanged();
+
+        // Start processing in a separate background task (so it doesn't block UI updates) 
+        _ = threadingService.Start();  // *************** recheck this * *************************************** //
+
+        // Update local variables and trigger UI updates during processing
+        while (_isProcessing)
+        {
+            // Periodically update local variables
+            _oddNumbers = threadingService.GetOddNumbers();
+            _evenNumbers = threadingService.GetEvenNumbers();
+            _primeNumbers = threadingService.GetPrimeNumbers();
+            _totalNumbers = threadingService.GetTotalNumbers();
+            _numberList = threadingService.GetGlobalList();
+
+            // Force UI to refresh immediately after updates
+            StateHasChanged();
+
+            // Introduce a small delay to prevent UI from freezing and to allow time for processing
+            await Task.Delay(10); // delay based on processing speed - 10ms
+
+            // Stop when processing is complete
+            if (_numberList.Count >= 10000000)
+            {
+                break;
+            }
+        }
+
+        // Final updates once processing is complete
+        _isSaveDisabled = false;
+        _isProcessing = false;
+
+        // Final UI update after operation
+        StateHasChanged();
     }
 
     private async Task Save()

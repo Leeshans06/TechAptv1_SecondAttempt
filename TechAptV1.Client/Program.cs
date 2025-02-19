@@ -2,6 +2,7 @@
 
 using Serilog;
 using TechAptV1.Client.Components;
+using TechAptV1.Client.Services;
 
 namespace TechAptV1.Client
 {
@@ -18,6 +19,8 @@ namespace TechAptV1.Client
                 builder.Services.AddSerilog(lc => lc
                     .WriteTo.Console(outputTemplate: "[{Timestamp:HH:mm:ss} {Level}] [{SourceContext}] {Message:lj}{NewLine}{Exception}")
                     .ReadFrom.Configuration(builder.Configuration));
+
+                builder.Services.AddScoped<ThreadingService>();               
 
                 // Add services to the container.
                 builder.Services.AddRazorComponents().AddInteractiveServerComponents();
