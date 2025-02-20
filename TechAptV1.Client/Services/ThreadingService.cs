@@ -1,5 +1,6 @@
 ﻿// Copyright © 2025 Always Active Technologies PTY Ltd
 using System.Collections.Concurrent;
+using TechAptV1.Client.Models;
 namespace TechAptV1.Client.Services;
 
 /// <summary>
@@ -14,7 +15,7 @@ public sealed class ThreadingService(ILogger<ThreadingService> logger, DataServi
     private int _primeNumbers = 0;
     private int _totalNumbers = 0;
     private bool _isRunning = false;
-    private readonly int _maxCount = 10000000;
+    private readonly int _maxCount = 10000000; // ************************* change back 10 000 000 **************************************************************
     private Task? _oddTask, _primeTask, _evenTask;    
     private readonly ConcurrentDictionary<int, int> _numbers = new(); // Create a Global ConcurrentDictionary - thread-safe dictionary designed for concurrent access in multi-threaded applications
     private readonly CancellationTokenSource _cts = new();
@@ -44,7 +45,7 @@ public sealed class ThreadingService(ILogger<ThreadingService> logger, DataServi
         // Monitor count and start Task 3 when _numbers.Count >= 2,500,000
         _ = Task.Run(() =>
         {
-            while (_numbers.Count < 2500000)
+            while (_numbers.Count < 2500000) // ***************change back ************************
             {
                 Task.Delay(10); // Delay to avoid high CPU usage - test higher ms
             }
@@ -66,7 +67,7 @@ public sealed class ThreadingService(ILogger<ThreadingService> logger, DataServi
             _limitReachedEvent.Set(); // Notify tasks to stop
         });
 
-        // Wait for Task 1,2 & 3 to finish
+        // Wait for Task 1 & 2 to finish
         await Task.WhenAll(_oddTask, _primeTask);
 
         // Wait for Task 3
@@ -84,7 +85,16 @@ public sealed class ThreadingService(ILogger<ThreadingService> logger, DataServi
     public async Task Save()
     {
         logger.LogInformation("Save");
-        throw new NotImplementedException();
+
+        // Convert dictionary to a list of Number objects and sort them
+        List<Number> numberList = _numbers
+            .Select(kvp => new Number { Value = kvp.Key, IsPrime = kvp.Value })
+            .OrderBy(n => n.Value)
+            .ToList();
+
+        await dataService.InitializeAsync();
+        await dataService.Save(numberList);
+        logger.LogInformation("Finished - Save Numbers.");
     }
 
     /// <summary>
@@ -172,13 +182,13 @@ public sealed class ThreadingService(ILogger<ThreadingService> logger, DataServi
     /// <summary>
     /// Check if the number is prime
     /// </summary>
-    /// <param name="_num"></param>
+    /// <param name="num"></param>
     /// <returns>true/false</returns>
     public bool IsPrime(int num)
     {
         if (num < 2) return false;
-        if (num == 2 || num == 3) return true; // Directly check small primes
-        if (num % 2 == 0 || num % 3 == 0) return false;// Exclude even numbers and multiples of 3
+        if (num == 2 || num == 3) return true; // Check for small primes
+        if (num % 2 == 0 || num % 3 == 0) return false; // Exclude even numbers and multiples of 3
 
         for (int i = 5; i * i <= num; i += 2) // Skip even numbers
         {
@@ -189,15 +199,15 @@ public sealed class ThreadingService(ILogger<ThreadingService> logger, DataServi
     /// <summary>
     /// Function to handle TryAdd
     /// </summary>
-    /// <param name="_num"></param>
-    /// <param name="_isPrime"></param>    
+    /// <param name="num"></param>
+    /// <param name="isPrime"></param>    
     private void TryAddNumber(int num,bool isPrime)
     {
         bool lockTaken = false;
         try
         {
             s_spinLock.Enter(ref lockTaken); // Acquire the lock - spinlock - to ensure thread safety while modifying _numbers and s_queue.
-            if (_numbers.Count <= _maxCount)
+            if (_numbers.Count < _maxCount)
             {
                 // Remove the oldest entry
               //  if (s_queue.TryDequeue(out int oldestKey))

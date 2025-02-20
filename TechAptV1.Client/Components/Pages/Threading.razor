@@ -9,7 +9,9 @@
     <button class="btn btn-primary" @onclick="(async () => await this.Start())" disabled="@_isProcessing">
         @(_isProcessing ? "Processing..." : "Start")
     </button>
-    <button class="btn btn-primary" @onclick="(async () => await this.Save())">Save</button>
+    <button class="btn btn-primary" @onclick="(async () => await this.Save())" disabled="@_isSaveDisabled">
+        @(_isSaving ? "Processing..." : "Save")
+    </button>
 </div>
 <div>
     <hr>
@@ -32,7 +34,8 @@
     private int _primeNumbers = 0;
     private int _totalNumbers = 0;
     private bool _isProcessing = false;
-    private bool _isSaveDisabled = true;
+    private bool _isSaveDisabled = true; // Disabled button by default
+    private bool _isSaving = false;
     private ConcurrentDictionary<int, int> _numberList = new(); // Create a Global ConcurrentDictionary - thread-safe dictionary designed for concurrent access in multi-threaded applications
     private async Task Start()
     {
@@ -60,15 +63,15 @@
             StateHasChanged();
 
             // Introduce a small delay to prevent UI from freezing and to allow time for processing
-            await Task.Delay(10); // delay based on processing speed - 10ms
+            await Task.Delay(50); // delay based on processing speed - 10ms
 
             // Stop when processing is complete
-            if (_numberList.Count >= 10000000)
+            if (_numberList.Count >= 10000000) // ****************** rest back to  10 000 000 **************************************
             {
                 break;
             }
         }
-
+        // One more check for updated total numbers may be required*****************************************************************************
         // Final updates once processing is complete
         _isSaveDisabled = false;
         _isProcessing = false;
@@ -80,7 +83,15 @@
     private async Task Save()
     {
         this.Logger.LogInformation("Save");
-        throw new NotImplementedException();
+        _isSaving = true;
+        _isSaveDisabled = true;
+        await InvokeAsync(StateHasChanged);  // Ensure UI update
+
+        await threadingService.Save();
+
+        _isSaving = false;
+        _isSaveDisabled = false;
+        await InvokeAsync(StateHasChanged);  // Ensure UI update
     }
 
 }

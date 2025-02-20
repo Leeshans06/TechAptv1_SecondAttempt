@@ -20,7 +20,8 @@ namespace TechAptV1.Client
                     .WriteTo.Console(outputTemplate: "[{Timestamp:HH:mm:ss} {Level}] [{SourceContext}] {Message:lj}{NewLine}{Exception}")
                     .ReadFrom.Configuration(builder.Configuration));
 
-                builder.Services.AddScoped<ThreadingService>();               
+                builder.Services.AddScoped<ThreadingService>();
+                builder.Services.AddScoped<DataService>();  // Scoped for consistent per-request behavior
 
                 // Add services to the container.
                 builder.Services.AddRazorComponents().AddInteractiveServerComponents();
