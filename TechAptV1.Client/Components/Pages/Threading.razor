@@ -110,7 +110,7 @@
                 StateHasChanged(); // Ensure UI updates correctly
 
                 await Task.Delay(50); // Avoid UI freezing
-                if (_numberList.Count >= 100000 && _totalNumbers >= 100000)
+                if (_numberList.Count >= 10000000 && _totalNumbers >= 10000000)
                 {
                     // Reset even if an error occurs
                     _isSaveDisabled = false;
