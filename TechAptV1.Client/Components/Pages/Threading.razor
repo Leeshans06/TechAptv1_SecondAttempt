@@ -33,65 +33,98 @@
     private int _evenNumbers = 0;
     private int _primeNumbers = 0;
     private int _totalNumbers = 0;
-    private bool _isProcessing = false;
-    private bool _isSaveDisabled = true; // Disabled button by default
+    private bool _isProcessing = false; // Start button enabled by default
+    private bool _isSaveDisabled = true; // Save button disabled by default 
     private bool _isSaving = false;
     private ConcurrentDictionary<int, int> _numberList = new(); // Create a Global ConcurrentDictionary - thread-safe dictionary designed for concurrent access in multi-threaded applications
     private async Task Start()
     {
         this.Logger.LogInformation("Start");
         if (_isProcessing) return; // Prevent duplicate execution
-        _isProcessing = true;
-
-        // Immediately refresh UI to indicate processing has started
-        StateHasChanged();
-
-        // Start processing in a separate background task (so it doesn't block UI updates) 
-        _ = threadingService.Start();  // *************** recheck this * *************************************** //
-
-        // Update local variables and trigger UI updates during processing
-        while (_isProcessing)
+        _isProcessing = true; // Toggle start button state & name       
+        StateHasChanged(); // Immediately refresh UI to indicate processing has started
+        try
         {
-            // Periodically update local variables
-            _oddNumbers = threadingService.GetOddNumbers();
-            _evenNumbers = threadingService.GetEvenNumbers();
-            _primeNumbers = threadingService.GetPrimeNumbers();
-            _totalNumbers = threadingService.GetTotalNumbers();
-            _numberList = threadingService.GetGlobalList();
-
-            // Force UI to refresh immediately after updates
-            StateHasChanged();
-
-            // Introduce a small delay to prevent UI from freezing and to allow time for processing
-            await Task.Delay(50); // delay based on processing speed - 10ms
-
-            // Stop when processing is complete
-            if (_numberList.Count >= 10000000) // ****************** rest back to  10 000 000 **************************************
+            try
             {
-                break;
+                // Start processing in a separate background task (so it doesn't block UI updates)
+                _ = threadingService.Start(); 
             }
-        }
-        // One more check for updated total numbers may be required*****************************************************************************
-        // Final updates once processing is complete
-        _isSaveDisabled = false;
-        _isProcessing = false;
+            catch (Exception ex)
+            {
+                this.Logger.LogError(ex, "Error in threadingService.Start()");
+                throw; // Rethrow if you want global error handling to catch it
+            }
 
-        // Final UI update after operation
-        StateHasChanged();
+            // Update local variables and trigger UI updates during processing
+            while (_isProcessing)
+            {
+                await UpdateTotalsAsync();
+            }            
+        }
+        catch (Exception ex)
+        {
+            this.Logger.LogError(ex, "Error in Start()");
+        }
     }
 
     private async Task Save()
     {
         this.Logger.LogInformation("Save");
-        _isSaving = true;
-        _isSaveDisabled = true;
-        await InvokeAsync(StateHasChanged);  // Ensure UI update
+        _isSaving = true; // Toggle save button name
+        _isSaveDisabled = true; // Toggle save button state
+        await InvokeAsync(() => StateHasChanged());  // UI update
+        try
+        {
+            // Run the task in the background to prevent blocking UI updates
+            await Task.Run(async () =>
+            {
+                await threadingService.Save();
+            });
+        }
+        catch (Exception ex)
+        {
+            this.Logger.LogError(ex, "Error in save razor function.");
+        }
+        finally
+        {
+            // Reset even if an error occurs
+            _isSaving = false;
+            _isSaveDisabled = false;            
+            await InvokeAsync(() => StateHasChanged());
+            this.Logger.LogInformation("Save Complete razor function");
+        }
+    }
+    private async Task UpdateTotalsAsync()
+    {
+        try
+        {
+            while (_isProcessing)
+            {
+                _oddNumbers = threadingService.GetOddNumbers();
+                _evenNumbers = threadingService.GetEvenNumbers();
+                _primeNumbers = threadingService.GetPrimeNumbers();
+                _totalNumbers = threadingService.GetTotalNumbers();
+                _numberList = threadingService.GetGlobalList();
 
-        await threadingService.Save();
+                StateHasChanged(); // Ensure UI updates correctly
 
-        _isSaving = false;
-        _isSaveDisabled = false;
-        await InvokeAsync(StateHasChanged);  // Ensure UI update
+                await Task.Delay(50); // Avoid UI freezing
+                if (_numberList.Count >= 100000 && _totalNumbers >= 100000)
+                {
+                    // Reset even if an error occurs
+                    _isSaveDisabled = false;
+                    _isProcessing = false;
+                    StateHasChanged();
+                    break;
+                } 
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Error while fetching numbers");
+        }
+        return;
     }
 
 }

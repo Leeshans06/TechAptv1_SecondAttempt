@@ -2,18 +2,17 @@
 
 using TechAptV1.Client.Models;
 using System.Data.SQLite;
-using System.Data.Common;
 namespace TechAptV1.Client.Services;
 
 /// <summary>
 /// Data Access Service for interfacing with the SQLite Database
 /// </summary>
-public sealed class DataService
+public sealed class DataService : IDisposable
 {
     private readonly ILogger<DataService> _logger;
     private readonly IConfiguration _configuration;
     private readonly string _connectionString;
-    private readonly SQLiteConnection _connection;
+    private SQLiteConnection? _connection;
     /// <summary>
     /// Default constructor providing DI Logger and Configuration
     /// </summary>
@@ -30,11 +29,12 @@ public sealed class DataService
     /// </summary>
     public async Task InitializeAsync()
     {
-        using (var connection = new SQLiteConnection(_connectionString))
-        {
-            await connection.OpenAsync();
-            _logger.LogInformation("Database connection initialized.");
-        }
+        if (_connection != null && _connection.State == System.Data.ConnectionState.Open)
+            return; // Skip if already connected
+
+        _connection = new SQLiteConnection(_connectionString);
+        await _connection.OpenAsync();
+        this._logger.LogInformation("Database connection initialized.");
     }
     /// <summary>
     /// Save the list of data to the SQLite Database
@@ -49,15 +49,15 @@ public sealed class DataService
 
         const string insertQuery = "INSERT INTO Number (Value, IsPrime) VALUES (@Value, @IsPrime);";
 
-        // Persistent connection
-        await using var connection = new SQLiteConnection(_configuration.GetConnectionString("Default"));
-        await connection.OpenAsync();
+        // Ensure connection is initialized
+        await InitializeAsync();
 
+        // Persistent connection, reuse the already opened connection
         int totalRecords = dataList.Count;
         int batchCount = 0;
         int currentBatchSize = 0;
-        var transaction = await connection.BeginTransactionAsync();
-        await using var command = new SQLiteCommand(insertQuery, connection, (SQLiteTransaction)transaction);
+        var transaction = await _connection.BeginTransactionAsync();
+        await using var command = new SQLiteCommand(insertQuery, _connection, (SQLiteTransaction)transaction);
 
         command.Parameters.Add(new SQLiteParameter("@Value"));
         command.Parameters.Add(new SQLiteParameter("@IsPrime"));
@@ -71,6 +71,7 @@ public sealed class DataService
                 command.Parameters["@IsPrime"].Value = num.IsPrime;
                 await command.ExecuteNonQueryAsync();
                 currentBatchSize++;
+
                 // Commit when batch size reached or at the last record
                 if ((i + 1) % batchSize == 0 || i == totalRecords - 1)
                 {
@@ -83,7 +84,7 @@ public sealed class DataService
                     if (i < totalRecords - 1)
                     {
                         await transaction.DisposeAsync(); // Dispose the old transaction
-                        transaction = await connection.BeginTransactionAsync(); // Create new transaction
+                        transaction = await _connection.BeginTransactionAsync(); // Create new transaction
                     }
                 }
             }
@@ -106,37 +107,130 @@ public sealed class DataService
     /// </summary>
     private async Task EnsureTableExistsAsync()
     {
-        const string createTableQuery = @"CREATE TABLE IF NOT EXISTS Number (
-                                                Value INTEGER NOT NULL,
-                                                IsPrime INTEGER NOT NULL DEFAULT 0
-                                                );";
+        try
+        {
+            const string createTableQuery = @"CREATE TABLE IF NOT EXISTS Number (
+                                                    Value INTEGER NOT NULL,
+                                                    IsPrime INTEGER NOT NULL DEFAULT 0
+                                                    );";
 
-        await using var connection = new SQLiteConnection(_configuration.GetConnectionString("Default"));
-        await connection.OpenAsync();
+            // Ensure connection is initialized
+            await InitializeAsync();
 
-        await using var createCmd = new SQLiteCommand(createTableQuery, connection);
-        await createCmd.ExecuteNonQueryAsync();
+            await using var createCmd = new SQLiteCommand(createTableQuery, _connection);
+            await createCmd.ExecuteNonQueryAsync();
 
-        this._logger.LogInformation("Table check completed.");
+            this._logger.LogInformation("Table check completed.");
+        }
+        catch (Exception ex)
+        {
+            this._logger.LogError(ex, "An error occurred.");
+        }
     }
     /// <summary>
     /// Fetch N records from the SQLite Database where N is specified by the count parameter
     /// </summary>
     /// <param name="count"></param>
-    /// <returns></returns>
-    public IEnumerable<Number> Get(int count)
+    /// <returns>Numbers </returns>
+    public async Task<IEnumerable<Number>> Get(int count)
     {
         this._logger.LogInformation("Get");
-        throw new NotImplementedException();
+        try
+        {
+            var numbers = new List<Number>();
+            string query = $"SELECT Value, IsPrime FROM Number ORDER BY Value LIMIT {count};";
+
+            // Ensure connection is initialized
+            await InitializeAsync();
+
+            using (var cmd = new SQLiteCommand(query, _connection))
+            using (var reader = await cmd.ExecuteReaderAsync())
+            {
+                while (await reader.ReadAsync())
+                {
+                    numbers.Add(new Number
+                    {
+                        Value = reader.GetInt32(0),
+                        IsPrime = reader.GetInt32(1)
+                    });
+                }
+            }
+
+            return numbers;  // Successfully return the list
+        }
+        catch (Exception ex)
+        {
+            this._logger.LogError(ex, "An error occurred.");
+            return Enumerable.Empty<Number>();  // Return an empty collection in case of an error
+        }
     }
 
     /// <summary>
     /// Fetch All the records from the SQLite Database
     /// </summary>
     /// <returns></returns>
-    public IEnumerable<Number> GetAll()
+    public async Task<IEnumerable<Number>> GetAll()
     {
         this._logger.LogInformation("GetAll");
-        throw new NotImplementedException();
+
+        var numbers = new List<Number>();
+        string query = "SELECT Value, IsPrime FROM Number";
+
+        // Ensure connection is initialized
+        await InitializeAsync();
+
+        using (var cmd = new SQLiteCommand(query, _connection))
+        using (var reader = await cmd.ExecuteReaderAsync())
+        {
+            while (await reader.ReadAsync())
+            {
+                this._logger.LogInformation("Adding to Number List : " + reader.GetInt32(0));
+                numbers.Add(new Number
+                {
+                    Value = reader.GetInt32(0),
+                    IsPrime = reader.GetInt32(1)
+                });
+            }
+        }
+
+        return numbers;
+    }
+
+    /// <summary>
+    /// Asynchronously streams all records from the "Number" table in the SQLite database.   
+    /// </summary>
+    public async IAsyncEnumerable<Number> StreamAllNumbers()
+    {
+        // Ensure the connection is initialized and open.
+        await InitializeAsync();
+
+        using var command = new SQLiteCommand("SELECT Value, IsPrime FROM Number", _connection);
+        using var reader = await command.ExecuteReaderAsync();
+
+        while (await reader.ReadAsync())
+        {
+            yield return new Number
+            {
+                Value = reader.GetInt32(0),
+                IsPrime = reader.GetInt32(1)
+            };
+        }
+    }
+
+    /// <summary>
+    /// Disposes of the database connection, ensuring it is properly closed if open.
+    /// This method is automatically called at the end of the scope when using dependency injection.
+    /// </summary>
+    public void Dispose()
+    {
+        if (_connection != null)
+        {
+            if (_connection.State == System.Data.ConnectionState.Open)
+            {
+                this._connection.Close();
+                this._logger.LogInformation("Database connection closed.");
+            }
+            _connection.Dispose();
+        }
     }
 }
