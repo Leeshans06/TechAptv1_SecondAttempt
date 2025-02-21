@@ -1,10 +1,17 @@
-﻿@page "/threading"
+﻿@using System.Collections.Concurrent
+@using TechAptV1.Client.Services
+@page "/threading"
+@inject ThreadingService threadingService
 
 <h3>Threading &amp; Data Persistence</h3>
 
 <div>
-    <button class="btn btn-primary" @onclick="(async () => await this.Start())">Start</button>
-    <button class="btn btn-primary" @onclick="(async () => await this.Save())">Save</button>
+    <button class="btn btn-primary" @onclick="(async () => await this.Start())" disabled="@_isProcessing">
+        @(_isProcessing ? "Processing..." : "Start")
+    </button>
+    <button class="btn btn-primary" @onclick="(async () => await this.Save())" disabled="@_isSaveDisabled">
+        @(_isSaving ? "Processing..." : "Save")
+    </button>
 </div>
 <div>
     <hr>
@@ -26,17 +33,98 @@
     private int _evenNumbers = 0;
     private int _primeNumbers = 0;
     private int _totalNumbers = 0;
-
+    private bool _isProcessing = false; // Start button enabled by default
+    private bool _isSaveDisabled = true; // Save button disabled by default 
+    private bool _isSaving = false;
+    private ConcurrentDictionary<int, int> _numberList = new(); // Create a Global ConcurrentDictionary - thread-safe dictionary designed for concurrent access in multi-threaded applications
     private async Task Start()
     {
         this.Logger.LogInformation("Start");
-        throw new NotImplementedException();
+        if (_isProcessing) return; // Prevent duplicate execution
+        _isProcessing = true; // Toggle start button state & name       
+        StateHasChanged(); // Immediately refresh UI to indicate processing has started
+        try
+        {
+            try
+            {
+                // Start processing in a separate background task (so it doesn't block UI updates)
+                _ = threadingService.Start(); 
+            }
+            catch (Exception ex)
+            {
+                this.Logger.LogError(ex, "Error in threadingService.Start()");
+                throw; // Rethrow if you want global error handling to catch it
+            }
+
+            // Update local variables and trigger UI updates during processing
+            while (_isProcessing)
+            {
+                await UpdateTotalsAsync();
+            }            
+        }
+        catch (Exception ex)
+        {
+            this.Logger.LogError(ex, "Error in Start()");
+        }
     }
 
     private async Task Save()
     {
         this.Logger.LogInformation("Save");
-        throw new NotImplementedException();
+        _isSaving = true; // Toggle save button name
+        _isSaveDisabled = true; // Toggle save button state
+        await InvokeAsync(() => StateHasChanged());  // UI update
+        try
+        {
+            // Run the task in the background to prevent blocking UI updates
+            await Task.Run(async () =>
+            {
+                await threadingService.Save();
+            });
+        }
+        catch (Exception ex)
+        {
+            this.Logger.LogError(ex, "Error in save razor function.");
+        }
+        finally
+        {
+            // Reset even if an error occurs
+            _isSaving = false;
+            _isSaveDisabled = false;            
+            await InvokeAsync(() => StateHasChanged());
+            this.Logger.LogInformation("Save Complete razor function");
+        }
+    }
+    private async Task UpdateTotalsAsync()
+    {
+        try
+        {
+            while (_isProcessing)
+            {
+                _oddNumbers = threadingService.GetOddNumbers();
+                _evenNumbers = threadingService.GetEvenNumbers();
+                _primeNumbers = threadingService.GetPrimeNumbers();
+                _totalNumbers = threadingService.GetTotalNumbers();
+                _numberList = threadingService.GetGlobalList();
+
+                StateHasChanged(); // Ensure UI updates correctly
+
+                await Task.Delay(50); // Avoid UI freezing
+                if (_numberList.Count >= 10000000 && _totalNumbers >= 10000000)
+                {
+                    // Reset even if an error occurs
+                    _isSaveDisabled = false;
+                    _isProcessing = false;
+                    StateHasChanged();
+                    break;
+                } 
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Error while fetching numbers");
+        }
+        return;
     }
 
 }

@@ -1,30 +1,39 @@
 ﻿@page "/results"
 @using TechAptV1.Client.Models
 @using TechAptV1.Client.Services
+@using ProtoBuf;
+@using System.Xml;
+
+@inject DataService dataService
+@inject IJSRuntime JS
 
 <h3>Results</h3>
-<p>The table shows the top N numbers generated. The download XML and Binary feature allows you to download the entire data set</p>
+<p>The table shows the top @_count numbers generated. The download XML and Binary feature allows you to download the entire data set</p>
 
 <div>
-    <button class="btn btn-primary" @onclick="(async () => await this.DownloadXml())">Download XML</button>
-    <button class="btn btn-primary" @onclick="(async () => await this.DownloadBinary())">Download Binary</button>
+    <button class="btn btn-primary" @onclick="(async () => await this.DownloadXml())" disabled="@_isProcessingXML">
+        @(_isProcessingXMLDownload ? "Processing..." : "Download XML")
+    </button>
+    <button class="btn btn-primary" @onclick="(async () => await this.DownloadBinary())" disabled="@_isProcessingBinary">
+        @(_isProcessingBinaryDownload ? "Processing..." : "Download Binary")
+    </button>
 </div>
 <div>
     <table class="table">
         <thead>
-        <tr>
-            <th>Value</th>
-            <th>IsPrime</th>
-        </tr>
+            <tr>
+                <th>Value</th>
+                <th>IsPrime</th>
+            </tr>
         </thead>
         <tbody>
-        @foreach (var item in this.numbers)
-        {
-            <tr>
-                <td>@item.Value</td>
-                <td>@item.IsPrime</td>
-            </tr>
-        }
+            @foreach (var item in this.numbers)
+            {
+                <tr>
+                    <td>@item.Value</td>
+                    <td>@item.IsPrime</td>
+                </tr>
+            }
         </tbody>
     </table>
 </div>
@@ -34,6 +43,32 @@
     [Inject] public required ILogger<Threading> Logger { get; set; }
 
     private List<Number> numbers = new ();
+    private int  _count = 0;
+    private bool _isDataFetched = false; // Track whether data has been fetched
+    private bool _isProcessingXMLDownload;
+    private bool _isProcessingBinaryDownload;
+    private bool _isProcessingBinary;
+    private bool _isProcessingXML;
+
+    /// <summary>
+    /// Fetches Top 20  records for table view
+    /// </summary>
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender && !_isDataFetched)
+        {
+            this.Logger.LogInformation("Start - Fetch top 20 numbers.");
+
+            // Fetch the data asynchronously and convert it to a List<Number>
+            numbers = (await dataService.Get(20)).ToList();
+            _count = numbers.Count(); // Get the count of fetched numbers
+
+            _isDataFetched = true;  // Set the flag to true to avoid re-fetching data
+            StateHasChanged(); // Trigger UI refresh to display the data
+
+            this.Logger.LogInformation("Finish - Fetch top 20 numbers.");
+        }
+    }
 
     /// <summary>
     /// Fetches all the records, serializes them to XML and downloads the file
@@ -41,7 +76,46 @@
     private async Task DownloadXml()
     {
         this.Logger.LogInformation("DownloadXml");
-        throw new NotImplementedException();
+        _isProcessingXML = true;
+        _isProcessingXMLDownload = true;
+        StateHasChanged(); // Update UI
+
+        var fileName = "Numbers.xml";
+        var contentType = "application/xml";
+
+        try
+        {
+            using var memoryStream = new MemoryStream();
+            using (var writer = XmlWriter.Create(memoryStream, new XmlWriterSettings { Indent = true }))
+            {
+                writer.WriteStartDocument();
+                writer.WriteStartElement("Numbers");
+
+                await foreach (var number in dataService.StreamAllNumbers())
+                {
+                    writer.WriteStartElement("Number");
+
+                    writer.WriteElementString("Value", number.Value.ToString());
+                    writer.WriteElementString("IsPrime", number.IsPrime.ToString());
+
+                    writer.WriteEndElement(); // </Number>
+                }
+
+                writer.WriteEndElement(); // </Numbers>
+                writer.WriteEndDocument();
+            }
+
+            memoryStream.Position = 0; // Reset stream position
+
+            await DownloadFile(fileName, contentType, memoryStream);
+        }
+        finally
+        {
+            _isProcessingXML = false;
+            _isProcessingXMLDownload = false;
+            StateHasChanged(); // Update UI
+            this.Logger.LogInformation("Finish - DownloadXmlStream");
+        }
     }
 
     /// <summary>
@@ -50,7 +124,83 @@
     private async Task DownloadBinary()
     {
         this.Logger.LogInformation("DownloadBinary");
-        throw new NotImplementedException();
-    }
+       
+        _isProcessingBinary = true;
+        _isProcessingBinaryDownload = true;
+        StateHasChanged(); // Update UI
 
+        var fileName = "numbers.bin";
+        var contentType = "application/octet-stream";
+
+        try
+        {
+            var memoryStream = new MemoryStream();
+            using (var writer = new BinaryWriter(memoryStream, System.Text.Encoding.UTF8, leaveOpen: true))
+            {
+                await foreach (var number in dataService.StreamAllNumbers())
+                {
+                    writer.Write(number.Value);
+                    writer.Write(number.IsPrime);
+                }
+            }
+
+            memoryStream.Position = 0; // Reset position for reading
+
+            try
+            {
+                await DownloadFile(fileName, contentType, memoryStream);
+            }
+            catch (JSException jsEx)
+            {
+                this.Logger.LogError($"JavaScript error during file download: {jsEx.Message}");
+            }
+            catch (Exception ex)
+            {
+                this.Logger.LogError($"Unexpected error during file download: {ex.Message}");
+            }
+        }
+        finally
+        {
+            _isProcessingBinary = false;
+            _isProcessingBinaryDownload = false;
+            StateHasChanged(); // Update UI
+            this.Logger.LogInformation("Finish - DownloadBinary");
+        }
+    }
+    /// <summary>
+    /// Initiates a file download in the browser by converting the given byte array to a Base64 URL
+    /// and invoking a JavaScript function to trigger the download.
+    /// </summary>
+    /// <param name="fileName">The name of the file to be downloaded.</param>
+    /// <param name="contentType">The MIME type of the file.</param>
+    /// <param name="dataStream">DataStream content</param>
+    private async Task DownloadFile(string fileName, string contentType, Stream dataStream)
+    {
+        try
+        {
+            using var streamRef = new DotNetStreamReference(dataStream);
+            await JS.InvokeVoidAsync("downloadFileStream", fileName, contentType, streamRef);
+        }
+        catch (JSException jsEx)
+        {
+            // Handle JS Interop-specific exceptions
+            this.Logger.LogError($"JavaScript error during file download: {jsEx.Message}");
+            // Optionally, notify the user
+            await DisplayErrorMessage("An error occurred while attempting to download the file.");
+        }
+        catch (Exception ex)
+        {
+            // Handle any other exceptions that might occur
+            this.Logger.LogError($"General error during file download: {ex.Message}");
+            // notify the user
+            await DisplayErrorMessage("An unexpected error occurred while processing your request.");
+        }
+    }
+    /// <summary>
+    /// Displays an error message to the user by triggering a JavaScript alert.
+    /// </summary>
+    private async Task DisplayErrorMessage(string message)
+    {        
+        await JS.InvokeVoidAsync("alert", message);
+    }
 }
